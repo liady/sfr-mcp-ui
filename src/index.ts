@@ -42,7 +42,7 @@ const handleCorsPreflightRequest = (): Response => {
 };
 
 // Define our MCP agent with tools
-export class MyMCP extends McpAgent {
+export class MyMCPv2 extends McpAgent {
   server = new McpServer({
     name: "SFR MCP",
     version: "1.0.0",
@@ -50,6 +50,11 @@ export class MyMCP extends McpAgent {
 
   async init() {
     const initStartTime = Date.now();
+
+    // Bound DO SQL storage: each MCP session is its own DO and the SDK
+    // never cleans them up. Self-destruct after 1h so storage doesn't
+    // grow without bound.
+    await this.schedule(60 * 60, "selfDestruct");
 
     logger.info("Starting MCP server initialization", {
       serverName: "SFR MCP",
@@ -94,6 +99,11 @@ export class MyMCP extends McpAgent {
       throw error;
     }
   }
+
+  async selfDestruct() {
+    logger.info("Self-destructing idle MCP session");
+    await this.destroy();
+  }
 }
 
 export default {
@@ -126,33 +136,16 @@ export default {
       const isStreamMethod = request.headers
         .get("accept")
         ?.includes("text/event-stream");
-      //  &&
-      // !!url.pathname &&
-      // url.pathname !== "/";
-      const isMessage =
-        request.method === "POST" &&
-        url.pathname.includes("/message") &&
-        url.pathname !== "/message";
-
-      ctx.props.requestUrl = request.url;
-
-      if (isMessage) {
-        return await MyMCP.serveSSE("/*").fetch(request, env, ctx);
-      }
 
       if (isStreamMethod) {
-        const isSse = request.method === "GET";
-        if (isSse) {
-          return await MyMCP.serveSSE("/*").fetch(request, env, ctx);
-        } else {
-          return await MyMCP.serve("/*").fetch(request, env, ctx);
-        }
-      } else {
-        // Default to serving the regular page
-        return requestHandler(request, {
-          cloudflare: { env, ctx },
-        });
+        return await MyMCPv2.serve("/*", {
+          binding: "MCP_OBJECT_V2",
+        }).fetch(request, env, ctx);
       }
+
+      return requestHandler(request, {
+        cloudflare: { env, ctx },
+      });
     } catch (error) {
       const requestDuration = Date.now() - requestStartTime;
       logger.error("Request processing failed", {
